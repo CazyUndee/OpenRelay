@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenRelay Frontend</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="bg-orb orb-a" aria-hidden="true"></div>
+    <div class="bg-orb orb-b" aria-hidden="true"></div>
+
+    <main class="shell">
+      <header class="hero">
+        <p class="eyebrow">OpenRelay</p>
+        <h1>Minimal AI Popup, Zero Noise</h1>
+        <p class="sub">
+          Desktop popup assistant with streaming replies, image generation fallback,
+          hotkey open, and a focused UI.
+        </p>
+        <div class="actions">
+          <a class="btn btn-primary" id="download-btn" href="../research.py" download="research.py">Download Script</a>
+          <a class="btn btn-ghost" href="#features">See Features</a>
+        </div>
+      </header>
+
+      <section class="panel" id="features">
+        <h2>What You Get</h2>
+        <div class="grid">
+          <article class="card">
+            <h3>Streaming Chat</h3>
+            <p>Shows tokens as they arrive, with a smooth loading shimmer before first token.</p>
+          </article>
+          <article class="card">
+            <h3>Image Generation</h3>
+            <p>XML tag trigger + fallback behavior if the model refuses image generation text.</p>
+          </article>
+          <article class="card">
+            <h3>Quick Access</h3>
+            <p>Global hotkey (<code>Ctrl + Space</code>), drag-to-move popup, and persistent position.</p>
+          </article>
+          <article class="card">
+            <h3>Utility</h3>
+            <p>Copy and save generated images directly from the UI footer actions.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel compact">
+        <h2>Install</h2>
+        <pre><code>pip install PyQt6 keyboard tiktoken
+python research.py</code></pre>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
