@@ -7,8 +7,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from PyQt6.QtCore import QObject, Qt, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QFont, QImage, QLinearGradient, QPainter, QPainterPath, QRegion, QTextCursor
+from PyQt6.QtCore import QObject, Qt, QThread, QTimer, QElapsedTimer, pyqtSignal
+from PyQt6.QtGui import QBrush, QColor, QFont, QImage, QLinearGradient, QPainter, QPainterPath, QPixmap, QRegion, QTextCursor
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -38,6 +38,7 @@ TEXT_MODEL_OPTIONS = [
     ("Amazon", "nova-fast"),
     ("Gemini Flash", "gemini-fast"),
     ("Gemini", "gemini-search"),
+    ("Qwen", "qwen-character"),
     ("GPT 5 mini", "openai"),
     ("GPT 5 Nano", "openai-fast"),
     ("DeepSeek V3.2", "deepseek"),
@@ -277,34 +278,40 @@ class ImageWorker(QObject):
 class ShimmerLabel(QLabel):
     def __init__(self, text="Thinking...", parent=None):
         super().__init__(text, parent)
-        self._shimmer_pos = -0.08
+        self._shimmer_width_px = 40.0
+        self._shimmer_gap_px = 24.0
+        self._shimmer_speed_px_per_sec = 60.0
+        self._shimmer_phase_px = 0.0
+        self._elapsed = QElapsedTimer()
+        self._last_elapsed_ms = 0
         self._shimmer_active = False
-        self._pause_frames = 0
         self._timer = QTimer(self)
         self._timer.setInterval(16)
         self._timer.timeout.connect(self._tick)
         self.setFont(QFont("Segoe UI", 11))
         self.setStyleSheet("color:#555555;")
 
-    def _tick(self):
-        if self._pause_frames > 0:
-            self._pause_frames -= 1
-            return
+    def _text_span_px(self) -> float:
+        return float(max(1, self.fontMetrics().horizontalAdvance(self.text()) + 8))
 
-        speed_px = 3.0
-        width = max(1, self.width())
-        self._shimmer_pos += speed_px / width
-        if self._shimmer_pos > 1.08:
-            self._shimmer_pos = -0.08
-            self._pause_frames = 0
+    def _tick(self):
+        now_ms = self._elapsed.elapsed()
+        dt = max(1, now_ms - self._last_elapsed_ms) / 1000.0
+        self._last_elapsed_ms = now_ms
+
+        text_span = self._text_span_px()
+        gap = max(8.0, min(self._shimmer_gap_px, text_span * 0.12))
+        cycle_px = max(1.0, text_span + gap + self._shimmer_width_px)
+        self._shimmer_phase_px = (self._shimmer_phase_px + (self._shimmer_speed_px_per_sec * dt)) % cycle_px
         self.update()
 
     def start_shimmer(self, text=None):
         if text:
             self.setText(text)
         self._shimmer_active = True
-        self._shimmer_pos = -0.08
-        self._pause_frames = 0
+        self._shimmer_phase_px = 0.0
+        self._elapsed.restart()
+        self._last_elapsed_ms = 0
         self._timer.start()
         self.update()
 
@@ -329,18 +336,19 @@ class ShimmerLabel(QLabel):
         total = w + 2 * padding
 
         def norm(x):
-            return (x * w + padding) / total
+            return (x + padding) / total
 
-        pos = self._shimmer_pos
-        fade = 0.07
+        left_x = float(self.contentsRect().x())
+        center_px = left_x + self._shimmer_phase_px - (self._shimmer_width_px / 2.0)
+        half_width_px = self._shimmer_width_px / 2.0
         base = QColor(80, 80, 80)
         highlight = QColor(220, 220, 220)
         grad.setColorAt(0.0, base)
         grad.setColorAt(1.0, base)
         for stop_pos, color in (
-            (norm(pos - fade), base),
-            (norm(pos), highlight),
-            (norm(pos + fade), base),
+            (norm(center_px - half_width_px), base),
+            (norm(center_px), highlight),
+            (norm(center_px + half_width_px), base),
         ):
             if 0.0 <= stop_pos <= 1.0:
                 grad.setColorAt(stop_pos, color)
@@ -379,6 +387,7 @@ class ResearchWindow(QWidget):
         self.worker = None
         self._drag_offset = None
         self._stream_buffer = ""
+        self._streaming_assistant_started = False
         self._awaiting_first_token = False
         self._last_image = QImage()
         self._loading_elapsed = 0.0
@@ -410,6 +419,7 @@ class ResearchWindow(QWidget):
             "stop:0 rgba(54,95,170,58), stop:0.45 rgba(22,28,42,22), stop:1 #121212); "
             "color: #e8e8e8; border-radius: 12px; font-family: 'Segoe UI'; }"
             "#topbar { background: #171717; border: 1px solid #2b2b2b; border-radius: 8px; }"
+            "#bottom-actions { background: rgba(18, 18, 18, 0.88); border: 1px solid #2f2f2f; border-radius: 18px; }"
             "QTextEdit { background: transparent; border: none; padding: 4px 2px; font-size: 15px; }"
             "QLineEdit { background: transparent; border: none; padding: 6px 2px; font-size: 16px; color: #f0f0f0; }"
             "QComboBox { background: transparent; border: none; padding: 4px; color: #d8d8d8; }"
@@ -440,8 +450,7 @@ class ResearchWindow(QWidget):
             self.image_model_combo.addItem(label, api_name)
 
         self.clear_btn = QPushButton("Clear Context")
-        self.clear_btn.clicked.connect(self.clear_context)
-        self.clear_btn.setStyleSheet("color:#9f9f9f; font-size:12px;")
+        self.clear_btn.clicked.connect(self._on_clear_clicked)
 
         self.min_btn = QPushButton("−")
         self.min_btn.clicked.connect(self.showMinimized)
@@ -485,6 +494,7 @@ class ResearchWindow(QWidget):
         self.output.setPlaceholderText("Assistant reply")
         self.output.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.output.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.output.mouseDoubleClickEvent = self._output_mouse_double_click
 
         self.reply_stack_host = QWidget()
         self.reply_stack = QStackedLayout(self.reply_stack_host)
@@ -498,9 +508,25 @@ class ResearchWindow(QWidget):
         self.copy_img_btn = QPushButton("Copy Image")
         self.copy_img_btn.clicked.connect(self._copy_image)
         self.copy_img_btn.hide()
+        self.open_img_btn = QPushButton("Open Image")
+        self.open_img_btn.clicked.connect(self._open_image_overlay)
+        self.open_img_btn.hide()
         self.save_img_btn = QPushButton("Save Image")
         self.save_img_btn.clicked.connect(self._save_image)
         self.save_img_btn.hide()
+        self.copy_msg_btn = QPushButton("Copy Message")
+        self.copy_msg_btn.clicked.connect(self._copy_message)
+        self.copy_msg_btn.hide()
+        self.open_img_btn.setProperty("base_text", "Open Image")
+        self.copy_img_btn.setProperty("base_text", "Copy Image")
+        self.save_img_btn.setProperty("base_text", "Save Image")
+        self.copy_msg_btn.setProperty("base_text", "Copy Message")
+        self.clear_btn.setProperty("base_text", "Clear Context")
+        self._apply_action_text_style(self.open_img_btn)
+        self._apply_action_text_style(self.copy_img_btn)
+        self._apply_action_text_style(self.save_img_btn)
+        self._apply_action_text_style(self.copy_msg_btn)
+        self._apply_action_text_style(self.clear_btn)
 
         bottom_row = QHBoxLayout()
         bottom_row.setContentsMargins(0, 0, 0, 0)
@@ -509,15 +535,46 @@ class ResearchWindow(QWidget):
         left_col.setSpacing(2)
         left_col.addWidget(self.token_label)
         bottom_row.addLayout(left_col, 1)
-        bottom_row.addWidget(self.copy_img_btn)
-        bottom_row.addWidget(self.save_img_btn)
-        bottom_row.addWidget(self.clear_btn)
+
+        self.bottom_actions = QWidget()
+        self.bottom_actions.setObjectName("bottom-actions")
+        self.bottom_actions.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.bottom_actions.setStyleSheet("background: rgba(18, 18, 18, 0.88); border: 1px solid #2f2f2f; border-radius: 18px;")
+        self.bottom_actions.setMinimumHeight(38)
+        actions_row = QHBoxLayout(self.bottom_actions)
+        actions_row.setContentsMargins(8, 4, 8, 4)
+        actions_row.setSpacing(6)
+        actions_row.addWidget(self.open_img_btn)
+        actions_row.addWidget(self.copy_img_btn)
+        actions_row.addWidget(self.save_img_btn)
+        actions_row.addWidget(self.copy_msg_btn)
+        actions_row.addWidget(self.clear_btn)
+        bottom_row.addWidget(self.bottom_actions)
 
         content.addWidget(self.top_wrap)
         content.addWidget(self.input)
         content.addWidget(self.input_divider)
         content.addWidget(self.reply_stack_host, 1)
         content.addLayout(bottom_row)
+
+        self.image_overlay = QWidget(self)
+        self.image_overlay.setStyleSheet("background: #000000;")
+        self.image_overlay.hide()
+        overlay_layout = QVBoxLayout(self.image_overlay)
+        overlay_layout.setContentsMargins(18, 18, 18, 18)
+        overlay_layout.setSpacing(12)
+        self.overlay_image_label = QLabel()
+        self.overlay_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.overlay_image_label.setStyleSheet("background: #000000;")
+        self.overlay_close_btn = QPushButton("Close Image")
+        self.overlay_close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.overlay_close_btn.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._apply_pill_button_style(self.overlay_close_btn, text_color="#f0f0f0")
+        self.overlay_close_btn.clicked.connect(self._close_image_overlay)
+        overlay_layout.addWidget(self.overlay_image_label, 1)
+        overlay_layout.addWidget(self.overlay_close_btn, 0, Qt.AlignmentFlag.AlignHCenter)
+        self.image_overlay.mousePressEvent = self._overlay_mouse_press
+        self.image_overlay.raise_()
 
     def _load_models(self):
         self.chat_model_combo.clear()
@@ -557,12 +614,15 @@ class ResearchWindow(QWidget):
         self.input.setFocus()
 
     def show_assistant_text(self, text: str):
-        self.output.clear()
-        try:
-            self.output.setMarkdown(text)
-        except Exception:
-            self.output.setPlainText(text)
+        self._append_transcript_entry(text)
+
+    def _append_transcript_entry(self, text: str):
         self.output.moveCursor(QTextCursor.MoveOperation.End)
+        if self.output.toPlainText().strip():
+            self.output.insertPlainText("\n\n")
+        self.output.insertPlainText(text)
+        self.output.moveCursor(QTextCursor.MoveOperation.End)
+        self.output.ensureCursorVisible()
 
     def _append_stream_text(self, text: str):
         self.output.moveCursor(QTextCursor.MoveOperation.End)
@@ -593,21 +653,7 @@ class ResearchWindow(QWidget):
             self.loading_sub.setText(elapsed)
 
     def show_error(self, text: str):
-        self.output.clear()
-        safe = (
-            str(text)
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-        )
-        self.output.setHtml(
-            "<div style='margin:6px 0;padding:10px 12px;"
-            "border-radius:10px;border:1px solid rgba(212,92,92,0.55);"
-            "background:rgba(64,20,20,0.55);color:#ffd0d0;'>"
-            "<div style='font-weight:600;margin-bottom:4px;'>Error</div>"
-            f"<div style='white-space:pre-wrap;'>{safe}</div>"
-            "</div>"
-        )
+        self._append_transcript_entry(f"Error: {text}")
         self._hide_loading()
 
     def set_busy(self, busy: bool):
@@ -624,8 +670,11 @@ class ResearchWindow(QWidget):
             return
         self.history.clear()
         self.output.clear()
+        self._streaming_assistant_started = False
+        self.open_img_btn.hide()
         self.copy_img_btn.hide()
         self.save_img_btn.hide()
+        self.copy_msg_btn.hide()
         self._last_image = QImage()
         self._hide_loading()
         self.input.setFocus()
@@ -699,11 +748,13 @@ class ResearchWindow(QWidget):
         self.input.clear()
         self.input.setFocus()
         self.output.setStyleSheet("")
-        self.output.clear()
         self._stream_buffer = ""
+        self._streaming_assistant_started = False
         self._awaiting_first_token = True
+        self.open_img_btn.hide()
         self.copy_img_btn.hide()
         self.save_img_btn.hide()
+        self.copy_msg_btn.hide()
         self._show_loading("Thinking...")
         QApplication.processEvents()
 
@@ -752,7 +803,11 @@ class ResearchWindow(QWidget):
         if self._awaiting_first_token:
             self._awaiting_first_token = False
             self._hide_loading()
-            self.output.clear()
+        if not self._streaming_assistant_started:
+            self._streaming_assistant_started = True
+            self.output.moveCursor(QTextCursor.MoveOperation.End)
+            if self.output.toPlainText().strip():
+                self.output.insertPlainText("\n\n")
         self._stream_buffer += text
         self._append_stream_text(text)
 
@@ -799,11 +854,14 @@ class ResearchWindow(QWidget):
             return
 
         self.history.append({"role": "assistant", "content": answer})
-        self.show_assistant_text(answer)
+        if not self._stream_buffer:
+            self.show_assistant_text(answer)
+        self.copy_msg_btn.show()
 
     def _on_image_finished(self, data: bytes):
         self.set_busy(False)
         self._hide_loading()
+        self.copy_msg_btn.show()
         image = QImage()
         if not image.loadFromData(data):
             self._on_worker_failed("Image data could not be decoded.")
@@ -818,23 +876,142 @@ class ResearchWindow(QWidget):
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
-        self.output.clear()
+        rounded = self._rounded_image(scaled, 12)
+        self.output.moveCursor(QTextCursor.MoveOperation.End)
+        if self.output.toPlainText().strip():
+            self.output.insertPlainText("\n\n")
         cursor = self.output.textCursor()
-        cursor.insertImage(scaled, "generated_image")
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.insertImage(rounded, "generated_image")
         self.output.setTextCursor(cursor)
+        self.output.ensureCursorVisible()
         self._last_image = image
+        self.open_img_btn.show()
         self.copy_img_btn.show()
         self.save_img_btn.show()
+        self.open_img_btn.setText(str(self.open_img_btn.property("base_text") or "Open Image"))
+        self.copy_img_btn.setText(str(self.copy_img_btn.property("base_text") or "Copy Image"))
+        self.save_img_btn.setText(str(self.save_img_btn.property("base_text") or "Save Image"))
 
     def _on_worker_failed(self, error_message: str):
         self.set_busy(False)
         self._hide_loading()
         self.show_error(error_message)
 
+    def _flash_button_text(self, button: QPushButton, text: str, duration_ms: int = 900):
+        base = button.property("base_text") or button.text()
+        button.setText(str(text))
+        QTimer.singleShot(duration_ms, lambda b=button, t=str(base): b.setText(t))
+
+    def _apply_pill_button_style(self, button: QPushButton, text_color: str = "#d2d2d2"):
+        button.setMinimumHeight(30)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setStyleSheet(
+            "QPushButton { "
+            "background: rgba(90, 90, 90, 0.16); "
+            "border: 1px solid rgba(180, 180, 180, 0.24); "
+            f"color: {text_color}; "
+            "border-radius: 15px; "
+            "padding: 4px 12px; "
+            "font-size: 12px; }"
+            "QPushButton:hover { background: rgba(120, 120, 120, 0.28); }"
+            "QPushButton:pressed { background: rgba(170, 170, 170, 0.34); }"
+            "QPushButton:disabled { color: #6f6f6f; }"
+        )
+
+    def _apply_action_text_style(self, button: QPushButton):
+        button.setMinimumHeight(28)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setStyleSheet(
+            "QPushButton { "
+            "background: transparent; "
+            "border: none; "
+            "color: #d2d2d2; "
+            "border-radius: 10px; "
+            "padding: 4px 10px; "
+            "font-size: 12px; }"
+            "QPushButton:hover { background: rgba(120, 120, 120, 0.24); }"
+            "QPushButton:pressed { background: rgba(170, 170, 170, 0.30); }"
+            "QPushButton:disabled { color: #6f6f6f; }"
+        )
+
+    def _rounded_image(self, image: QImage, radius: int) -> QImage:
+        if image.isNull():
+            return image
+        rounded = QImage(image.size(), QImage.Format.Format_ARGB32_Premultiplied)
+        rounded.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(rounded)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        path = QPainterPath()
+        path.addRoundedRect(0, 0, float(image.width()), float(image.height()), float(radius), float(radius))
+        painter.setClipPath(path)
+        painter.drawImage(0, 0, image)
+        painter.end()
+        return rounded
+
+    def _open_image_overlay(self):
+        if self._last_image.isNull():
+            return
+        self.image_overlay.setGeometry(self.rect())
+        self._refresh_overlay_image()
+        self.image_overlay.show()
+        self.image_overlay.raise_()
+
+    def _close_image_overlay(self):
+        self.image_overlay.hide()
+
+    def _overlay_mouse_press(self, event):
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        clicked = self.image_overlay.childAt(event.position().toPoint())
+        if clicked is self.overlay_image_label or clicked is self.overlay_close_btn:
+            event.accept()
+            return
+        self._close_image_overlay()
+        event.accept()
+
+    def _refresh_overlay_image(self):
+        if self._last_image.isNull():
+            return
+        target = self.image_overlay.size()
+        max_w = max(200, target.width() - 40)
+        max_h = max(160, target.height() - 96)
+        scaled = self._last_image.scaled(
+            max_w,
+            max_h,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        rounded = self._rounded_image(scaled, 14)
+        self.overlay_image_label.setPixmap(QPixmap.fromImage(rounded))
+
+    def _output_mouse_double_click(self, event):
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and not self._last_image.isNull()
+            and self.copy_img_btn.isVisible()
+        ):
+            self._open_image_overlay()
+            event.accept()
+            return
+        QTextEdit.mouseDoubleClickEvent(self.output, event)
+
+    def _on_clear_clicked(self):
+        self.clear_context()
+        self._flash_button_text(self.clear_btn, "Cleared!")
+
     def _copy_image(self):
         if self._last_image.isNull():
             return
         QApplication.clipboard().setImage(self._last_image)
+        self._flash_button_text(self.copy_img_btn, "Copied!")
+
+    def _copy_message(self):
+        text = self.output.toPlainText().strip()
+        if not text:
+            return
+        QApplication.clipboard().setText(text)
+        self._flash_button_text(self.copy_msg_btn, "Copied!")
 
     def _save_image(self):
         if self._last_image.isNull():
@@ -852,7 +1029,23 @@ class ResearchWindow(QWidget):
         lower = path.lower()
         if lower.endswith(".jpg") or lower.endswith(".jpeg"):
             fmt = "JPEG"
-        self._last_image.save(path, fmt)
+        if self._last_image.save(path, fmt):
+            self._flash_button_text(self.save_img_btn, "Saved!")
+
+    def _on_stop_clicked(self):
+        if not self.busy:
+            return
+        if self.thread and self.thread.isRunning():
+            self.thread.terminate()
+            self.thread.wait(300)
+        self._cleanup_worker()
+        self._awaiting_first_token = False
+        self._stream_buffer = ""
+        self._streaming_assistant_started = False
+        self.set_busy(False)
+        self._hide_loading()
+        self._append_transcript_entry("Request stopped.")
+        self.input.setFocus()
 
     def _cleanup_worker(self):
         if self.thread and self.thread.isRunning():
@@ -863,6 +1056,9 @@ class ResearchWindow(QWidget):
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
+            if self.image_overlay.isVisible():
+                self._close_image_overlay()
+                return
             self.hide()
             return
         super().keyPressEvent(event)
@@ -889,6 +1085,9 @@ class ResearchWindow(QWidget):
         path.addRoundedRect(float(self.rect().x()), float(self.rect().y()), float(self.width()), float(self.height()), radius, radius)
         polygon = path.toFillPolygon().toPolygon()
         self.setMask(QRegion(polygon))
+        self.image_overlay.setGeometry(self.rect())
+        if self.image_overlay.isVisible():
+            self._refresh_overlay_image()
         self._schedule_geometry_save()
         super().resizeEvent(event)
 

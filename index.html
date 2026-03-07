@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>OpenRelay Frontend</title>
+    <title>OpenRelay</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&display=swap" rel="stylesheet" />
@@ -14,45 +14,145 @@
     <div class="bg-orb orb-b" aria-hidden="true"></div>
 
     <main class="shell">
-      <header class="hero">
-        <p class="eyebrow">OpenRelay</p>
-        <h1>Minimal AI Popup, Zero Noise</h1>
-        <p class="sub">
-          Desktop popup assistant with streaming replies, image generation fallback,
-          hotkey open, and a focused UI.
-        </p>
-        <div class="actions">
-          <a class="btn btn-primary" id="download-btn" href="../research.py" download="research.py">Download Script</a>
-          <a class="btn btn-ghost" href="#features">See Features</a>
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">OpenRelay</p>
+          <h1>A minimal desktop AI popup for fast chat and image generation.</h1>
+          <p class="sub">
+            Built with PyQt6, OpenRelay stays compact and out of the way while giving you
+            streaming responses, quick image generation, model selection, and instant access
+            from a global <code>Ctrl + Space</code> hotkey.
+          </p>
+
+          <div class="hero-points">
+            <span>Streaming replies</span>
+            <span>Image fallback support</span>
+            <span>Hotkey popup access</span>
+            <span>Copy and save tools</span>
+          </div>
+
+          <div class="actions">
+            <a class="btn btn-primary" id="download-btn" href="./research.py" download="research.py">Download Script</a>
+            <a class="btn btn-ghost" href="#features">See Features</a>
+          </div>
         </div>
-      </header>
+
+        <aside class="hero-preview" aria-label="OpenRelay interface preview">
+          <div class="window-card">
+            <div class="window-top">
+              <div class="top-controls">
+                <span class="label">Text</span>
+                <span class="select-chip">Gemini</span>
+                <span class="label">Image</span>
+                <span class="select-chip">High Quality</span>
+              </div>
+              <div class="window-buttons">
+                <span>−</span>
+                <span>×</span>
+              </div>
+            </div>
+
+            <div class="window-input">Enter message</div>
+            <div class="window-divider"></div>
+
+            <div class="window-body">
+              <div class="thinking-block">
+                <p class="stream-label">Thinking...</p>
+                <p class="stream-sub">Elapsed: 1.4s</p>
+              </div>
+            </div>
+
+            <div class="window-footer">
+              <span class="footer-hint">press control + space to open</span>
+              <div class="footer-actions shell-actions">
+                <span>Copy Message</span>
+                <span>Clear Context</span>
+              </div>
+            </div>
+          </div>
+        </aside>
+      </section>
 
       <section class="panel" id="features">
-        <h2>What You Get</h2>
+        <div class="panel-heading">
+          <div>
+            <p class="section-kicker">Features</p>
+            <h2>What OpenRelay does</h2>
+          </div>
+          <p class="panel-copy">
+            A compact always-on-top assistant window designed for quick prompts, short research,
+            and on-demand image generation.
+          </p>
+        </div>
+
         <div class="grid">
           <article class="card">
-            <h3>Streaming Chat</h3>
-            <p>Shows tokens as they arrive, with a smooth loading shimmer before first token.</p>
+            <h3>Streaming chat</h3>
+            <p>
+              Assistant responses stream into the output area as they arrive, with a lightweight
+              shimmer-style loading state before the first token appears.
+            </p>
           </article>
           <article class="card">
-            <h3>Image Generation</h3>
-            <p>XML tag trigger + fallback behavior if the model refuses image generation text.</p>
+            <h3>Image generation flow</h3>
+            <p>
+              When you explicitly ask for an image, the app can switch from chat output into image
+              generation and still fall back if the model answers with a refusal instead of the image tag.
+            </p>
           </article>
           <article class="card">
-            <h3>Quick Access</h3>
-            <p>Global hotkey (<code>Ctrl + Space</code>), drag-to-move popup, and persistent position.</p>
+            <h3>Compact popup UI</h3>
+            <p>
+              The interface is frameless, draggable, always on top, and remembers its last size
+              and position so it opens like a tool instead of a full app window.
+            </p>
           </article>
           <article class="card">
-            <h3>Utility</h3>
-            <p>Copy and save generated images directly from the UI footer actions.</p>
+            <h3>Model selection</h3>
+            <p>
+              Text and image models are selectable from the top bar, including Gemini, Claude,
+              GPT, DeepSeek, flux, zimage, and flux-2-dev options.
+            </p>
+          </article>
+          <article class="card">
+            <h3>Built-in image actions</h3>
+            <p>
+              Generated images can be opened in a larger overlay, copied to the clipboard,
+              or saved locally without leaving the popup.
+            </p>
+          </article>
+          <article class="card">
+            <h3>Quick keyboard access</h3>
+            <p>
+              With keyboard support enabled, <code>Ctrl + Space</code> brings the popup forward
+              instantly for fast prompts and short back-and-forth use.
+            </p>
           </article>
         </div>
       </section>
 
-      <section class="panel compact">
-        <h2>Install</h2>
-        <pre><code>pip install PyQt6 keyboard tiktoken
+      <section class="panel split">
+        <div>
+          <p class="section-kicker">How it works</p>
+          <h2>Simple popup workflow</h2>
+          <ol class="steps">
+            <li>Open the popup and type into the single input field.</li>
+            <li>Watch the reply stream in as the model responds.</li>
+            <li>Ask for an image when you want generation instead of text.</li>
+            <li>Use the footer actions to copy text, clear context, open images, copy them, or save them.</li>
+          </ol>
+        </div>
+
+        <div>
+          <p class="section-kicker">Run locally</p>
+          <h2>Install</h2>
+          <pre><code>pip install PyQt6 keyboard tiktoken
 python research.py</code></pre>
+          <p class="install-note">
+            OpenRelay uses Pollinations chat and image endpoints and reads
+            <code>POLLINATIONS_API_KEY</code> from your environment.
+          </p>
+        </div>
       </section>
     </main>
 
